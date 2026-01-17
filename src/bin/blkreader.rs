@@ -56,9 +56,6 @@ struct Args {
 }
 
 fn main() {
-    // Request sudo privileges
-    sudo::escalate_if_needed().expect("Failed to escalate privileges");
-
     let args = Args::parse();
 
     if let Err(e) = run(&args) {
@@ -82,6 +79,17 @@ fn run(args: &Args) -> io::Result<()> {
             eprintln!("Nothing to read (length is 0)");
         }
         return Ok(());
+    }
+
+    // Request sudo privileges only if not using fallback mode
+    // or if we need to access the block device directly
+    if !args.allow_fallback {
+        sudo::escalate_if_needed().map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("Failed to escalate privileges: {}", e),
+            )
+        })?;
     }
 
     // Print verbose information
