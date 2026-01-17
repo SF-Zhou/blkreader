@@ -11,6 +11,12 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+/// Direct I/O alignment requirement (512 bytes is the minimum for most block devices).
+const ALIGNMENT: usize = 512;
+
+/// Default chunk size for reading large files (1 MB).
+const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
+
 /// Read file data directly from block device using extent information.
 ///
 /// This tool queries the file's extent information via FIEMAP and reads
@@ -22,7 +28,7 @@ struct Args {
     /// Path to the file to read
     path: PathBuf,
 
-    /// Byte offset to start reading from
+    /// Byte offset to start reading from (must be aligned to 512 bytes for Direct I/O)
     #[arg(short, long, default_value = "0")]
     offset: u64,
 
@@ -64,6 +70,27 @@ fn main() {
     }
 }
 
+/// Allocate an aligned buffer for Direct I/O.
+fn alloc_aligned_buffer(size: usize) -> Vec<u8> {
+    // Allocate with extra space for alignment
+    let layout = std::alloc::Layout::from_size_align(size, ALIGNMENT).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        panic!("Failed to allocate aligned buffer");
+    }
+    unsafe { Vec::from_raw_parts(ptr, size, size) }
+}
+
+/// Align offset down to the alignment boundary.
+fn align_down(offset: u64, alignment: u64) -> u64 {
+    offset & !(alignment - 1)
+}
+
+/// Align length up to the alignment boundary.
+fn align_up(length: u64, alignment: u64) -> u64 {
+    (length + alignment - 1) & !(alignment - 1)
+}
+
 fn run(args: &Args) -> io::Result<()> {
     // Determine the length to read
     let file = File::open(&args.path)?;
@@ -97,9 +124,6 @@ fn run(args: &Args) -> io::Result<()> {
         print_verbose_info(&args.path, args.offset, length)?;
     }
 
-    // Prepare buffer
-    let mut buf = vec![0u8; length as usize];
-
     // Build options
     let options = Options::new()
         .with_cache(!args.no_cache)
@@ -107,33 +131,88 @@ fn run(args: &Args) -> io::Result<()> {
         .with_fill_unwritten(args.fill_unwritten)
         .with_allow_fallback(args.allow_fallback);
 
-    // Perform the read
-    let state = args.path.blk_read_at_opt(&mut buf, args.offset, &options)?;
+    // Open output file or use stdout
+    let mut output: Box<dyn Write> = if let Some(output_path) = &args.output {
+        Box::new(File::create(output_path)?)
+    } else {
+        Box::new(io::stdout())
+    };
+
+    // Calculate aligned read parameters for Direct I/O
+    let aligned_offset = align_down(args.offset, ALIGNMENT as u64);
+    let offset_adjustment = (args.offset - aligned_offset) as usize;
+    let total_length = align_up(length + offset_adjustment as u64, ALIGNMENT as u64);
+
+    // Determine chunk size (aligned to ALIGNMENT)
+    let chunk_size = DEFAULT_CHUNK_SIZE;
+
+    // Read in chunks to handle large files
+    let mut total_bytes_read = 0usize;
+    let mut current_aligned_offset = aligned_offset;
+    let mut remaining = total_length;
+    let mut first_chunk = true;
+    let mut block_device_path = PathBuf::new();
+
+    while remaining > 0 {
+        let read_size = std::cmp::min(remaining as usize, chunk_size);
+
+        // Allocate aligned buffer for this chunk
+        let mut buf = alloc_aligned_buffer(read_size);
+
+        // Perform the read
+        let state = args
+            .path
+            .blk_read_at_opt(&mut buf, current_aligned_offset, &options)?;
+
+        if first_chunk {
+            block_device_path = state.block_device_path.clone();
+            first_chunk = false;
+        }
+
+        if state.bytes_read == 0 {
+            break;
+        }
+
+        // Calculate the actual data to output from this chunk
+        let skip = if current_aligned_offset == aligned_offset {
+            offset_adjustment
+        } else {
+            0
+        };
+
+        let bytes_to_write = std::cmp::min(
+            state.bytes_read.saturating_sub(skip),
+            (length as usize).saturating_sub(total_bytes_read),
+        );
+
+        if bytes_to_write > 0 {
+            output.write_all(&buf[skip..skip + bytes_to_write])?;
+            total_bytes_read += bytes_to_write;
+        }
+
+        // Check if we've read enough
+        if total_bytes_read >= length as usize {
+            break;
+        }
+
+        // Short read indicates EOF
+        if state.bytes_read < read_size {
+            break;
+        }
+
+        current_aligned_offset += read_size as u64;
+        remaining -= read_size as u64;
+    }
 
     if args.verbose {
         eprintln!();
-        eprintln!("Read {} bytes", state.bytes_read);
-        if state.used_fallback {
-            eprintln!("(Used fallback to regular file I/O)");
-        } else {
-            eprintln!("Block device: {}", state.block_device_path.display());
+        eprintln!("Read {} bytes", total_bytes_read);
+        if !block_device_path.as_os_str().is_empty() {
+            eprintln!("Block device: {}", block_device_path.display());
         }
-    }
-
-    // Truncate buffer to actual bytes read
-    buf.truncate(state.bytes_read);
-
-    // Write output
-    if let Some(output_path) = &args.output {
-        let mut output_file = File::create(output_path)?;
-        output_file.write_all(&buf)?;
-        if args.verbose {
+        if let Some(output_path) = &args.output {
             eprintln!("Output written to: {}", output_path.display());
         }
-    } else {
-        let stdout = io::stdout();
-        let mut handle = stdout.lock();
-        handle.write_all(&buf)?;
     }
 
     Ok(())
@@ -143,6 +222,16 @@ fn print_verbose_info(path: &PathBuf, offset: u64, length: u64) -> io::Result<()
     eprintln!("File: {}", path.display());
     eprintln!("Offset: {} (0x{:x})", offset, offset);
     eprintln!("Length: {} (0x{:x})", length, length);
+
+    // Show alignment info
+    let aligned_offset = align_down(offset, ALIGNMENT as u64);
+    let aligned_length = align_up(length + (offset - aligned_offset), ALIGNMENT as u64);
+    if aligned_offset != offset || aligned_length != length {
+        eprintln!(
+            "Aligned offset: {} (0x{:x}), Aligned length: {} (0x{:x})",
+            aligned_offset, aligned_offset, aligned_length, aligned_length
+        );
+    }
 
     // Resolve block device
     match path.resolve_device() {

@@ -22,6 +22,19 @@
 //! - Configurable handling of holes and unwritten extents
 //! - Fallback to regular file I/O when safe
 //!
+//! ## Direct I/O Alignment Requirements
+//!
+//! When reading directly from block devices (not using fallback mode), the following
+//! alignment requirements must be met for Direct I/O:
+//!
+//! - **Buffer alignment**: The buffer must be aligned to at least 512 bytes (sector size).
+//!   For optimal performance on modern devices, 4096-byte alignment is recommended.
+//! - **Offset alignment**: The read offset should be aligned to 512 bytes.
+//! - **Length alignment**: The read length should be aligned to 512 bytes.
+//!
+//! If alignment requirements are not met, the underlying read may fail with an
+//! `EINVAL` error. The CLI tool handles alignment automatically.
+//!
 //! ## Example
 //!
 //! ```no_run
@@ -29,9 +42,10 @@
 //! use std::path::Path;
 //!
 //! let path = Path::new("/path/to/file");
+//! // Buffer should be aligned; using 4096 bytes which is a common block size
 //! let mut buf = vec![0u8; 4096];
 //!
-//! // Simple read
+//! // Simple read (offset 0 is aligned)
 //! let bytes_read = path.blk_read_at(&mut buf, 0).unwrap();
 //!
 //! // Read with options

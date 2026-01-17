@@ -22,6 +22,17 @@ use std::sync::Arc;
 /// - [`blk_read_at`](BlkReader::blk_read_at): Simple read that returns the number of bytes read
 /// - [`blk_read_at_opt`](BlkReader::blk_read_at_opt): Advanced read with options that returns detailed state
 ///
+/// # Direct I/O Alignment Requirements
+///
+/// When reading directly from block devices (not using fallback mode), the following
+/// alignment requirements must be met:
+///
+/// - **Buffer alignment**: The buffer should be aligned to at least 512 bytes (sector size).
+/// - **Offset alignment**: The read offset should be aligned to 512 bytes.
+/// - **Length alignment**: The buffer length should be aligned to 512 bytes.
+///
+/// If alignment requirements are not met, the underlying read may fail with `EINVAL`.
+///
 /// # Example
 ///
 /// ```no_run
@@ -29,9 +40,10 @@ use std::sync::Arc;
 /// use std::path::Path;
 ///
 /// let path = Path::new("/path/to/file");
+/// // Use aligned buffer size (4096 is a common block size)
 /// let mut buf = vec![0u8; 4096];
 ///
-/// // Simple read
+/// // Simple read (offset 0 is aligned)
 /// let bytes = path.blk_read_at(&mut buf, 0).unwrap();
 ///
 /// // Read with options
@@ -46,8 +58,8 @@ pub trait BlkReader {
     ///
     /// # Arguments
     ///
-    /// * `buf` - Buffer to read data into
-    /// * `offset` - Byte offset in the file to start reading from
+    /// * `buf` - Buffer to read data into. For Direct I/O, should be aligned to 512 bytes.
+    /// * `offset` - Byte offset in the file to start reading from. Should be aligned to 512 bytes.
     ///
     /// # Returns
     ///
@@ -64,8 +76,8 @@ pub trait BlkReader {
     ///
     /// # Arguments
     ///
-    /// * `buf` - Buffer to read data into
-    /// * `offset` - Byte offset in the file to start reading from
+    /// * `buf` - Buffer to read data into. For Direct I/O, should be aligned to 512 bytes.
+    /// * `offset` - Byte offset in the file to start reading from. Should be aligned to 512 bytes.
     /// * `options` - Configuration options for the read operation
     ///
     /// # Returns

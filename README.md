@@ -173,6 +173,18 @@ When enabled, unwritten (preallocated but not yet written) extents are filled wi
 
 When enabled, if the queried extents fully cover the read range and contain no unwritten extents, the read will be performed using regular file I/O instead of direct block device I/O. This avoids the need for root privileges in such cases.
 
+## Direct I/O Alignment Requirements
+
+When using the library API to read directly from block devices (not using fallback mode), the following alignment requirements must be met:
+
+- **Buffer alignment**: The buffer should be aligned to at least 512 bytes (sector size). For optimal performance, 4096-byte alignment is recommended.
+- **Offset alignment**: The read offset should be aligned to 512 bytes.
+- **Length alignment**: The buffer length should be aligned to 512 bytes.
+
+If alignment requirements are not met, the read operation may fail with an `EINVAL` error.
+
+**Note**: The CLI tool handles alignment automatically by adjusting offsets and using aligned buffers internally.
+
 ## Requirements
 
 - Linux operating system
