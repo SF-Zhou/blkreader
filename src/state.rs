@@ -35,11 +35,13 @@ impl State {
         }
     }
 
-    /// Create a State for a fallback read (no block device access).
-    pub fn fallback(bytes_read: usize) -> Self {
+    /// Create a State for a fallback read (regular file I/O).
+    ///
+    /// Even in fallback mode, the extents are included for informational purposes.
+    pub fn fallback(extents: Vec<FiemapExtent>, bytes_read: usize) -> Self {
         Self {
             block_device_path: PathBuf::new(),
-            extents: Vec::new(),
+            extents,
             bytes_read,
             used_fallback: true,
         }
@@ -73,10 +75,16 @@ mod tests {
 
     #[test]
     fn test_state_fallback() {
-        let state = State::fallback(1024);
+        let extents = vec![FiemapExtent {
+            logical: 0,
+            physical: 1000,
+            length: 4096,
+            flags: ExtentFlags::empty(),
+        }];
+        let state = State::fallback(extents, 1024);
 
         assert!(state.block_device_path.as_os_str().is_empty());
-        assert!(state.extents.is_empty());
+        assert_eq!(state.extents.len(), 1);
         assert_eq!(state.bytes_read, 1024);
         assert!(state.used_fallback);
     }

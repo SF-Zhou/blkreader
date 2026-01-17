@@ -3,16 +3,15 @@
 //! This module provides the [`BlkReader`] trait which enables reading file data
 //! directly from the underlying block device using extent information.
 
-use crate::cache::{get_or_create_device, open_device_uncached, CachedDevice};
+use crate::cache::{get_or_create_cached_device, open_device_uncached, CachedDevice};
 use crate::options::Options;
 use crate::state::State;
 
 use blkmap::{Fiemap, FiemapExtent};
-use blkpath::ResolveDevice;
 
 use std::fs::File;
 use std::io;
-use std::os::unix::fs::{FileExt, MetadataExt};
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -90,22 +89,17 @@ pub trait BlkReader {
 /// Internal helper to perform the actual read operation.
 struct ReadContext<'a> {
     file: &'a File,
-    file_path: Option<&'a Path>,
     options: &'a Options,
 }
 
 impl<'a> ReadContext<'a> {
-    fn new(file: &'a File, file_path: Option<&'a Path>, options: &'a Options) -> Self {
-        Self {
-            file,
-            file_path,
-            options,
-        }
+    fn new(file: &'a File, options: &'a Options) -> Self {
+        Self { file, options }
     }
 
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<State> {
         if buf.is_empty() {
-            return Ok(State::fallback(0));
+            return Ok(State::fallback(Vec::new(), 0));
         }
 
         let length = buf.len() as u64;
@@ -122,19 +116,16 @@ impl<'a> ReadContext<'a> {
 
         // Check if fallback is allowed and safe
         if self.options.allow_fallback && self.can_use_fallback(&extents, offset, length) {
-            return self.fallback_read(buf, offset);
+            return self.fallback_read(buf, offset, extents);
         }
 
-        // Get block device path
-        let device_path = self.resolve_device_path()?;
-
         // Get device file handle (cached or uncached)
-        let device = self.get_device_handle(&device_path)?;
+        let device = self.get_device_handle()?;
 
         // Perform the read
         let bytes_read = self.read_from_device(&device, buf, offset, &extents)?;
 
-        Ok(State::new(device_path, extents, bytes_read, false))
+        Ok(State::new(device.path().clone(), extents, bytes_read, false))
     }
 
     /// Check if we can safely use fallback (regular file I/O).
@@ -179,28 +170,23 @@ impl<'a> ReadContext<'a> {
     }
 
     /// Perform a fallback read using regular file I/O.
-    fn fallback_read(&self, buf: &mut [u8], offset: u64) -> io::Result<State> {
+    fn fallback_read(
+        &self,
+        buf: &mut [u8],
+        offset: u64,
+        extents: Vec<FiemapExtent>,
+    ) -> io::Result<State> {
         let bytes_read = FileExt::read_at(self.file, buf, offset)?;
-        Ok(State::fallback(bytes_read))
-    }
-
-    /// Resolve the block device path for the file.
-    fn resolve_device_path(&self) -> io::Result<PathBuf> {
-        if let Some(path) = self.file_path {
-            path.resolve_device()
-        } else {
-            self.file.resolve_device()
-        }
+        Ok(State::fallback(extents, bytes_read))
     }
 
     /// Get a device handle, either cached or uncached based on options.
-    fn get_device_handle(&self, device_path: &Path) -> io::Result<DeviceHandle> {
+    fn get_device_handle(&self) -> io::Result<DeviceHandle> {
         if self.options.enable_cache {
-            let dev_id = self.file.metadata()?.dev();
-            let cached = get_or_create_device(dev_id, device_path.to_path_buf())?;
+            let cached = get_or_create_cached_device(self.file)?;
             Ok(DeviceHandle::Cached(cached))
         } else {
-            let uncached = open_device_uncached(device_path.to_path_buf())?;
+            let uncached = open_device_uncached(self.file)?;
             Ok(DeviceHandle::Uncached(uncached))
         }
     }
@@ -247,13 +233,8 @@ impl<'a> ReadContext<'a> {
                 }
             }
 
-            // Handle unwritten extent
-            if extent.flags.is_unwritten() {
-                if !self.options.fill_unwritten {
-                    // EOF at unwritten
-                    return Ok(bytes_read);
-                }
-
+            // Handle unwritten extent - fill with zeros if requested
+            if extent.flags.is_unwritten() && self.options.zero_unwritten {
                 // Fill with zeros for unwritten extent
                 let read_start = current_offset.max(extent.logical);
                 let read_end = extent_end.min(end);
@@ -266,6 +247,7 @@ impl<'a> ReadContext<'a> {
                 current_offset = read_end;
                 continue;
             }
+            // Otherwise unwritten extents fall through to read raw data from block device
 
             // Handle hole-like extents (UNKNOWN, DELALLOC)
             if extent.flags.is_unknown() || extent.flags.is_delalloc() {
@@ -285,7 +267,7 @@ impl<'a> ReadContext<'a> {
                 continue;
             }
 
-            // Normal extent - read from block device
+            // Normal extent (or unwritten with zero_unwritten=false) - read from block device
             let read_start = current_offset.max(extent.logical);
             let read_end = extent_end.min(end);
             let read_len = (read_end - read_start) as usize;
@@ -329,6 +311,14 @@ enum DeviceHandle {
 }
 
 impl DeviceHandle {
+    /// Get the path of the block device.
+    fn path(&self) -> &PathBuf {
+        match self {
+            DeviceHandle::Cached(cached) => &cached.path,
+            DeviceHandle::Uncached(uncached) => &uncached.path,
+        }
+    }
+
     /// Read data from the device at the specified physical offset.
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
         let file = match self {
@@ -345,7 +335,7 @@ impl DeviceHandle {
 impl BlkReader for Path {
     fn blk_read_at_opt(&self, buf: &mut [u8], offset: u64, options: &Options) -> io::Result<State> {
         let file = File::open(self)?;
-        let ctx = ReadContext::new(&file, Some(self), options);
+        let ctx = ReadContext::new(&file, options);
         ctx.read_at(buf, offset)
     }
 }
@@ -360,7 +350,7 @@ impl BlkReader for PathBuf {
 // Implementation for File
 impl BlkReader for File {
     fn blk_read_at_opt(&self, buf: &mut [u8], offset: u64, options: &Options) -> io::Result<State> {
-        let ctx = ReadContext::new(self, None, options);
+        let ctx = ReadContext::new(self, options);
         ctx.read_at(buf, offset)
     }
 }
@@ -374,12 +364,12 @@ mod tests {
         let opts = Options::new()
             .with_cache(false)
             .with_fill_holes(true)
-            .with_fill_unwritten(true)
+            .with_zero_unwritten(true)
             .with_allow_fallback(true);
 
         assert!(!opts.enable_cache);
         assert!(opts.fill_holes);
-        assert!(opts.fill_unwritten);
+        assert!(opts.zero_unwritten);
         assert!(opts.allow_fallback);
     }
 
@@ -389,7 +379,7 @@ mod tests {
 
         let file = File::open("/proc/self/exe").unwrap();
         let options = Options::new().with_allow_fallback(true);
-        let ctx = ReadContext::new(&file, None, &options);
+        let ctx = ReadContext::new(&file, &options);
 
         // Empty extents - cannot fallback
         assert!(!ctx.can_use_fallback(&[], 0, 100));

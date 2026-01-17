@@ -85,7 +85,7 @@ fn main() -> std::io::Result<()> {
     let options = Options::new()
         .with_cache(true)           // Enable block device caching (default)
         .with_fill_holes(true)      // Fill holes with zeros
-        .with_fill_unwritten(true)  // Fill unwritten extents with zeros
+        .with_zero_unwritten(true)  // Fill unwritten extents with zeros
         .with_allow_fallback(true); // Allow fallback to regular file I/O
 
     // Read with detailed state information
@@ -136,7 +136,7 @@ blkreader /path/to/file -v
 blkreader /path/to/file -O output.bin
 
 # Fill holes and unwritten extents with zeros
-blkreader /path/to/file --fill-holes --fill-unwritten
+blkreader /path/to/file --fill-holes --zero-unwritten
 
 # Allow fallback to regular file I/O when safe
 blkreader /path/to/file --allow-fallback
@@ -151,7 +151,7 @@ blkreader /path/to/file --allow-fallback
 | `-v, --verbose` | Enable verbose output |
 | `-O, --output <FILE>` | Write output to file instead of stdout |
 | `--fill-holes` | Fill holes with zeros instead of stopping |
-| `--fill-unwritten` | Fill unwritten extents with zeros |
+| `--zero-unwritten` | Fill unwritten extents with zeros instead of reading raw block data |
 | `--allow-fallback` | Allow fallback to regular file I/O when safe |
 | `--no-cache` | Disable block device caching |
 
@@ -165,9 +165,11 @@ When enabled, block device file handles are cached globally based on the device 
 
 When enabled, holes in file extents are filled with zeros. When disabled, reading a hole causes an early EOF return.
 
-### `fill_unwritten` (default: `false`)
+### `zero_unwritten` (default: `false`)
 
-When enabled, unwritten (preallocated but not yet written) extents are filled with zeros. When disabled, reading an unwritten extent causes an early EOF return.
+When enabled, unwritten (preallocated but not yet written) extents are filled with zeros, matching normal filesystem read behavior.
+
+When disabled (default), unwritten extents are read directly from the block device, returning whatever raw data exists at those physical locations. This is useful for data recovery scenarios where you want to access the actual data written to pre-allocated extents.
 
 ### `allow_fallback` (default: `false`)
 

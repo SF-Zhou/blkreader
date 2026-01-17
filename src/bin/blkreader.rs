@@ -48,9 +48,9 @@ struct Args {
     #[arg(long)]
     fill_holes: bool,
 
-    /// Fill unwritten extents with zeros instead of stopping
+    /// Fill unwritten extents with zeros instead of reading raw block data
     #[arg(long)]
-    fill_unwritten: bool,
+    zero_unwritten: bool,
 
     /// Allow fallback to regular file I/O when safe
     #[arg(long)]
@@ -128,7 +128,7 @@ fn run(args: &Args) -> io::Result<()> {
     let options = Options::new()
         .with_cache(!args.no_cache)
         .with_fill_holes(args.fill_holes)
-        .with_fill_unwritten(args.fill_unwritten)
+        .with_zero_unwritten(args.zero_unwritten)
         .with_allow_fallback(args.allow_fallback);
 
     // Open output file or use stdout

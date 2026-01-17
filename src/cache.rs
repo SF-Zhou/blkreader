@@ -5,11 +5,12 @@
 //! from files on the same filesystem to share a single file handle
 //! to the underlying block device.
 
+use blkpath::ResolveDevice;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -17,7 +18,6 @@ use std::sync::{Arc, RwLock};
 #[derive(Debug)]
 pub struct CachedDevice {
     /// Path to the block device.
-    #[allow(dead_code)]
     pub path: PathBuf,
     /// File handle opened with O_DIRECT for reading.
     pub file: File,
@@ -42,18 +42,23 @@ impl CachedDevice {
 static DEVICE_CACHE: Lazy<RwLock<HashMap<u64, Arc<CachedDevice>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-/// Get or create a cached block device entry.
+/// Get or create a cached block device entry for the given file.
+///
+/// This function resolves the block device path from the file only if
+/// the device is not already cached. This avoids the expensive
+/// `resolve_device()` call on every read operation.
 ///
 /// # Arguments
 ///
-/// * `dev_id` - The device ID from file metadata (`stat.st_dev`)
-/// * `device_path` - The path to the block device
+/// * `file` - A reference to an open file
 ///
 /// # Returns
 ///
 /// An `Arc` to the cached device entry, or an error if the device
-/// could not be opened.
-pub fn get_or_create_device(dev_id: u64, device_path: PathBuf) -> io::Result<Arc<CachedDevice>> {
+/// could not be resolved or opened.
+pub fn get_or_create_cached_device(file: &File) -> io::Result<Arc<CachedDevice>> {
+    let dev_id = file.metadata()?.dev();
+
     // First, try to get from cache with a read lock
     {
         let cache = DEVICE_CACHE.read().unwrap();
@@ -62,7 +67,8 @@ pub fn get_or_create_device(dev_id: u64, device_path: PathBuf) -> io::Result<Arc
         }
     }
 
-    // Not in cache, acquire write lock and create
+    // Not in cache, resolve device path and acquire write lock
+    let device_path = file.resolve_device()?;
     let mut cache = DEVICE_CACHE.write().unwrap();
 
     // Double-check in case another thread added it
@@ -78,15 +84,18 @@ pub fn get_or_create_device(dev_id: u64, device_path: PathBuf) -> io::Result<Arc
 
 /// Open a block device without caching.
 ///
+/// This resolves the block device path from the file and opens it.
+///
 /// # Arguments
 ///
-/// * `device_path` - The path to the block device
+/// * `file` - A reference to an open file
 ///
 /// # Returns
 ///
 /// A `CachedDevice` entry (not actually cached), or an error if
-/// the device could not be opened.
-pub fn open_device_uncached(device_path: PathBuf) -> io::Result<CachedDevice> {
+/// the device could not be resolved or opened.
+pub fn open_device_uncached(file: &File) -> io::Result<CachedDevice> {
+    let device_path = file.resolve_device()?;
     CachedDevice::new(device_path)
 }
 

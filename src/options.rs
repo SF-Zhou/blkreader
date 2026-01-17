@@ -15,10 +15,15 @@ pub struct Options {
     /// When disabled, reading a hole will cause an early EOF return.
     pub fill_holes: bool,
 
-    /// Fill unwritten extents with zeros.
+    /// Fill unwritten extents with zeros instead of reading raw data.
     ///
-    /// When disabled, reading an unwritten extent will cause an early EOF return.
-    pub fill_unwritten: bool,
+    /// When disabled (default), unwritten extents are read from the block
+    /// device, returning whatever raw data exists at those physical locations.
+    /// This is useful for data recovery scenarios.
+    ///
+    /// When enabled, unwritten extents are filled with zeros (matching
+    /// normal filesystem read behavior).
+    pub zero_unwritten: bool,
 
     /// Allow fallback to regular file read when safe.
     ///
@@ -34,7 +39,7 @@ impl Default for Options {
         Self {
             enable_cache: true,
             fill_holes: false,
-            fill_unwritten: false,
+            zero_unwritten: false,
             allow_fallback: false,
         }
     }
@@ -59,8 +64,11 @@ impl Options {
     }
 
     /// Enable or disable filling unwritten extents with zeros.
-    pub fn with_fill_unwritten(mut self, fill: bool) -> Self {
-        self.fill_unwritten = fill;
+    ///
+    /// When disabled (default), unwritten extents are read from the block
+    /// device, returning raw data. When enabled, they are filled with zeros.
+    pub fn with_zero_unwritten(mut self, zero: bool) -> Self {
+        self.zero_unwritten = zero;
         self
     }
 
@@ -80,7 +88,7 @@ mod tests {
         let opts = Options::default();
         assert!(opts.enable_cache);
         assert!(!opts.fill_holes);
-        assert!(!opts.fill_unwritten);
+        assert!(!opts.zero_unwritten);
         assert!(!opts.allow_fallback);
     }
 
@@ -89,12 +97,12 @@ mod tests {
         let opts = Options::new()
             .with_cache(false)
             .with_fill_holes(true)
-            .with_fill_unwritten(true)
+            .with_zero_unwritten(true)
             .with_allow_fallback(true);
 
         assert!(!opts.enable_cache);
         assert!(opts.fill_holes);
-        assert!(opts.fill_unwritten);
+        assert!(opts.zero_unwritten);
         assert!(opts.allow_fallback);
     }
 }
