@@ -125,7 +125,12 @@ impl<'a> ReadContext<'a> {
         // Perform the read
         let bytes_read = self.read_from_device(&device, buf, offset, &extents)?;
 
-        Ok(State::new(device.path().clone(), extents, bytes_read, false))
+        Ok(State::new(
+            device.path().clone(),
+            extents,
+            bytes_read,
+            false,
+        ))
     }
 
     /// Check if we can safely use fallback (regular file I/O).

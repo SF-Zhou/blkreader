@@ -11,9 +11,6 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-/// Direct I/O alignment requirement (512 bytes is the minimum for most block devices).
-const ALIGNMENT: usize = 512;
-
 /// Default chunk size for reading large files (1 MB).
 const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 
@@ -28,7 +25,7 @@ struct Args {
     /// Path to the file to read
     path: PathBuf,
 
-    /// Byte offset to start reading from (must be aligned to 512 bytes for Direct I/O)
+    /// Byte offset to start reading from
     #[arg(short, long, default_value = "0")]
     offset: u64,
 
@@ -59,6 +56,10 @@ struct Args {
     /// Disable block device caching
     #[arg(long)]
     no_cache: bool,
+
+    /// Alignment for direct IO.
+    #[arg(long, default_value_t = 512)]
+    alignment: u64,
 }
 
 fn main() {
@@ -71,9 +72,9 @@ fn main() {
 }
 
 /// Allocate an aligned buffer for Direct I/O.
-fn alloc_aligned_buffer(size: usize) -> Vec<u8> {
+fn alloc_aligned_buffer(size: usize, align: usize) -> Vec<u8> {
     // Allocate with extra space for alignment
-    let layout = std::alloc::Layout::from_size_align(size, ALIGNMENT).unwrap();
+    let layout = std::alloc::Layout::from_size_align(size, align).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         panic!("Failed to allocate aligned buffer");
@@ -121,7 +122,7 @@ fn run(args: &Args) -> io::Result<()> {
 
     // Print verbose information
     if args.verbose {
-        print_verbose_info(&args.path, args.offset, length)?;
+        print_verbose_info(&args.path, args.offset, length, args.alignment)?;
     }
 
     // Build options
@@ -139,12 +140,15 @@ fn run(args: &Args) -> io::Result<()> {
     };
 
     // Calculate aligned read parameters for Direct I/O
-    let aligned_offset = align_down(args.offset, ALIGNMENT as u64);
+    let aligned_offset = align_down(args.offset, args.alignment);
     let offset_adjustment = (args.offset - aligned_offset) as usize;
-    let total_length = align_up(length + offset_adjustment as u64, ALIGNMENT as u64);
+    let total_length = align_up(length + offset_adjustment as u64, args.alignment);
 
     // Determine chunk size (aligned to ALIGNMENT)
     let chunk_size = DEFAULT_CHUNK_SIZE;
+
+    // Allocate aligned buffer.
+    let mut buf = alloc_aligned_buffer(chunk_size, args.alignment as usize);
 
     // Read in chunks to handle large files
     let mut total_bytes_read = 0usize;
@@ -155,14 +159,14 @@ fn run(args: &Args) -> io::Result<()> {
 
     while remaining > 0 {
         let read_size = std::cmp::min(remaining as usize, chunk_size);
-
-        // Allocate aligned buffer for this chunk
-        let mut buf = alloc_aligned_buffer(read_size);
+        let aligned_size = align_up(read_size as u64, args.alignment) as usize;
 
         // Perform the read
-        let state = args
-            .path
-            .blk_read_at_opt(&mut buf, current_aligned_offset, &options)?;
+        let state = args.path.blk_read_at_opt(
+            &mut buf[..aligned_size],
+            current_aligned_offset,
+            &options,
+        )?;
 
         if first_chunk {
             block_device_path = state.block_device_path.clone();
@@ -218,14 +222,14 @@ fn run(args: &Args) -> io::Result<()> {
     Ok(())
 }
 
-fn print_verbose_info(path: &PathBuf, offset: u64, length: u64) -> io::Result<()> {
+fn print_verbose_info(path: &PathBuf, offset: u64, length: u64, alignment: u64) -> io::Result<()> {
     eprintln!("File: {}", path.display());
     eprintln!("Offset: {} (0x{:x})", offset, offset);
     eprintln!("Length: {} (0x{:x})", length, length);
 
     // Show alignment info
-    let aligned_offset = align_down(offset, ALIGNMENT as u64);
-    let aligned_length = align_up(length + (offset - aligned_offset), ALIGNMENT as u64);
+    let aligned_offset = align_down(offset, alignment);
+    let aligned_length = align_up(length + (offset - aligned_offset), alignment);
     if aligned_offset != offset || aligned_length != length {
         eprintln!(
             "Aligned offset: {} (0x{:x}), Aligned length: {} (0x{:x})",

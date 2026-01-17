@@ -24,4 +24,5 @@ jobs:
         cargo fmt --all -- --check
         cargo clippy -- -D warnings
         cargo test
-        cargo run --release -- README.md
+        cargo run --release -- README.md -v > /tmp/README.md
+        diff README.md /tmp/README.md
