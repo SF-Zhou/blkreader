@@ -154,6 +154,7 @@ blkreader /path/to/file --allow-fallback
 | `--zero-unwritten` | Fill unwritten extents with zeros instead of reading raw block data |
 | `--allow-fallback` | Allow fallback to regular file I/O when safe |
 | `--no-cache` | Disable block device caching |
+| `--dry-run` | Skip actual device reads (for testing extent mapping) |
 
 ## Options
 
@@ -174,6 +175,16 @@ When disabled (default), unwritten extents are read directly from the block devi
 ### `allow_fallback` (default: `false`)
 
 When enabled, if the queried extents fully cover the read range and contain no unwritten extents, the read will be performed using regular file I/O instead of direct block device I/O. This avoids the need for root privileges in such cases.
+
+### `dry_run` (default: `false`)
+
+When enabled, no actual I/O operations are performed on block devices or files. Instead, the operation pretends to successfully read the requested amount of data. This is useful for:
+
+- Testing extent mapping logic without performing time-consuming I/O operations
+- Validating that a file's extents are accessible
+- Debugging and development without needing root privileges
+
+The extent information is still queried via FIEMAP to ensure the file structure is valid, but the actual data reading step is skipped.
 
 ## Direct I/O Alignment Requirements
 

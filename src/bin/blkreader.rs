@@ -57,6 +57,10 @@ struct Args {
     #[arg(long)]
     no_cache: bool,
 
+    /// Dry run mode - skip actual device reads
+    #[arg(long)]
+    dry_run: bool,
+
     /// Alignment for direct IO.
     #[arg(long, default_value_t = 512)]
     alignment: u64,
@@ -130,7 +134,8 @@ fn run(args: &Args) -> io::Result<()> {
         .with_cache(!args.no_cache)
         .with_fill_holes(args.fill_holes)
         .with_zero_unwritten(args.zero_unwritten)
-        .with_allow_fallback(args.allow_fallback);
+        .with_allow_fallback(args.allow_fallback)
+        .with_dry_run(args.dry_run);
 
     // Open output file or use stdout
     let mut output: Box<dyn Write> = if let Some(output_path) = &args.output {

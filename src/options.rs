@@ -42,6 +42,19 @@ pub struct Options {
     /// When disabled, partial reads are allowed and the actual number of
     /// bytes read is returned (similar to [`std::io::Read::read`]).
     pub read_exact: bool,
+
+    /// Dry run mode - skip actual device reads.
+    ///
+    /// When enabled, no actual I/O operations are performed on block devices
+    /// or files. Instead, the operation pretends to successfully read the
+    /// requested amount of data.
+    ///
+    /// This is useful for testing the extent mapping logic and validating
+    /// that a file's extents are accessible without performing time-consuming
+    /// I/O operations.
+    ///
+    /// When disabled (default), normal read operations are performed.
+    pub dry_run: bool,
 }
 
 impl Default for Options {
@@ -52,6 +65,7 @@ impl Default for Options {
             zero_unwritten: false,
             allow_fallback: false,
             read_exact: false,
+            dry_run: false,
         }
     }
 }
@@ -97,6 +111,17 @@ impl Options {
         self.read_exact = exact;
         self
     }
+
+    /// Enable or disable dry run mode.
+    ///
+    /// When enabled, no actual I/O operations are performed. Instead, the
+    /// operation pretends to successfully read the requested amount of data.
+    /// This is useful for testing extent mapping logic without performing
+    /// time-consuming I/O operations.
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +136,7 @@ mod tests {
         assert!(!opts.zero_unwritten);
         assert!(!opts.allow_fallback);
         assert!(!opts.read_exact);
+        assert!(!opts.dry_run);
     }
 
     #[test]
@@ -120,12 +146,14 @@ mod tests {
             .with_fill_holes(true)
             .with_zero_unwritten(true)
             .with_allow_fallback(true)
-            .with_read_exact(true);
+            .with_read_exact(true)
+            .with_dry_run(true);
 
         assert!(!opts.enable_cache);
         assert!(opts.fill_holes);
         assert!(opts.zero_unwritten);
         assert!(opts.allow_fallback);
         assert!(opts.read_exact);
+        assert!(opts.dry_run);
     }
 }

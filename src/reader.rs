@@ -182,7 +182,10 @@ impl<'a> ReadContext<'a> {
         extents: Vec<FiemapExtent>,
     ) -> io::Result<State> {
         // Check if we read the exact requested length
-        let bytes_read = if self.options.read_exact {
+        let bytes_read = if self.options.dry_run {
+            // In dry run mode, simulate read without actual I/O
+            buf.len()
+        } else if self.options.read_exact {
             self.file.read_exact_at(buf, offset)?;
             buf.len()
         } else {
@@ -290,7 +293,11 @@ impl<'a> ReadContext<'a> {
             // Read from device
             let buf_start = bytes_read;
             let buf_end = buf_start + read_len;
-            let actual_read = device.read_at(&mut buf[buf_start..buf_end], physical_offset)?;
+            let actual_read = device.read_at(
+                &mut buf[buf_start..buf_end],
+                physical_offset,
+                self.options.dry_run,
+            )?;
 
             bytes_read += actual_read;
             current_offset = read_start + actual_read as u64;
@@ -344,13 +351,18 @@ impl DeviceHandle {
     }
 
     /// Read data from the device at the specified physical offset.
-    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+    fn read_at(&self, buf: &mut [u8], offset: u64, dry_run: bool) -> io::Result<usize> {
         let file = match self {
             DeviceHandle::Cached(cached) => &cached.file,
             DeviceHandle::Uncached(uncached) => &uncached.file,
         };
 
-        let bytes = FileExt::read_at(file, buf, offset)?;
+        let bytes = if dry_run {
+            // In dry run mode, simulate read without actual I/O
+            buf.len()
+        } else {
+            FileExt::read_at(file, buf, offset)?
+        };
         Ok(bytes)
     }
 }
@@ -390,13 +402,15 @@ mod tests {
             .with_fill_holes(true)
             .with_zero_unwritten(true)
             .with_allow_fallback(true)
-            .with_read_exact(false);
+            .with_read_exact(false)
+            .with_dry_run(true);
 
         assert!(!opts.enable_cache);
         assert!(opts.fill_holes);
         assert!(opts.zero_unwritten);
         assert!(opts.allow_fallback);
         assert!(!opts.read_exact);
+        assert!(opts.dry_run);
     }
 
     #[test]
