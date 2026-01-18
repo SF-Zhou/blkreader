@@ -1,6 +1,6 @@
 [package]
 name = "blkreader"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["SF-Zhou"]
 description = "Read file data directly from block device using extent information"
