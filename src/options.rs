@@ -32,6 +32,16 @@ pub struct Options {
     /// using regular file I/O instead of direct block device I/O.
     /// This avoids the need for root privileges in such cases.
     pub allow_fallback: bool,
+
+    /// Require reading the exact requested length.
+    ///
+    /// When enabled, the read operation will return an error if the amount
+    /// of data read is less than the requested buffer size.
+    /// This is similar to the behavior of [`std::io::Read::read_exact`].
+    ///
+    /// When disabled, partial reads are allowed and the actual number of
+    /// bytes read is returned (similar to [`std::io::Read::read`]).
+    pub read_exact: bool,
 }
 
 impl Default for Options {
@@ -41,6 +51,7 @@ impl Default for Options {
             fill_holes: false,
             zero_unwritten: false,
             allow_fallback: false,
+            read_exact: false,
         }
     }
 }
@@ -77,6 +88,15 @@ impl Options {
         self.allow_fallback = allow;
         self
     }
+
+    /// Enable or disable requiring exact read length.
+    ///
+    /// When enabled, the read will fail if less than the requested number of
+    /// bytes are read. When disabled, partial reads are allowed.
+    pub fn with_read_exact(mut self, exact: bool) -> Self {
+        self.read_exact = exact;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -90,6 +110,7 @@ mod tests {
         assert!(!opts.fill_holes);
         assert!(!opts.zero_unwritten);
         assert!(!opts.allow_fallback);
+        assert!(!opts.read_exact);
     }
 
     #[test]
@@ -98,11 +119,13 @@ mod tests {
             .with_cache(false)
             .with_fill_holes(true)
             .with_zero_unwritten(true)
-            .with_allow_fallback(true);
+            .with_allow_fallback(true)
+            .with_read_exact(true);
 
         assert!(!opts.enable_cache);
         assert!(opts.fill_holes);
         assert!(opts.zero_unwritten);
         assert!(opts.allow_fallback);
+        assert!(opts.read_exact);
     }
 }

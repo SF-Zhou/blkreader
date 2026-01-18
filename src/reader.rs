@@ -181,7 +181,14 @@ impl<'a> ReadContext<'a> {
         offset: u64,
         extents: Vec<FiemapExtent>,
     ) -> io::Result<State> {
-        let bytes_read = FileExt::read_at(self.file, buf, offset)?;
+        // Check if we read the exact requested length
+        let bytes_read = if self.options.read_exact {
+            self.file.read_exact_at(buf, offset)?;
+            buf.len()
+        } else {
+            self.file.read_at(buf, offset)?
+        };
+
         Ok(State::fallback(extents, bytes_read))
     }
 
@@ -305,6 +312,18 @@ impl<'a> ReadContext<'a> {
             }
         }
 
+        // Check if we read the exact requested length
+        if self.options.read_exact && bytes_read < buf.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!(
+                    "failed to fill entire buffer: expected {} bytes, got {} bytes",
+                    buf.len(),
+                    bytes_read
+                ),
+            ));
+        }
+
         Ok(bytes_read)
     }
 }
@@ -370,12 +389,14 @@ mod tests {
             .with_cache(false)
             .with_fill_holes(true)
             .with_zero_unwritten(true)
-            .with_allow_fallback(true);
+            .with_allow_fallback(true)
+            .with_read_exact(false);
 
         assert!(!opts.enable_cache);
         assert!(opts.fill_holes);
         assert!(opts.zero_unwritten);
         assert!(opts.allow_fallback);
+        assert!(!opts.read_exact);
     }
 
     #[test]
@@ -415,5 +436,14 @@ mod tests {
             flags: ExtentFlags::empty(),
         }];
         assert!(!ctx.can_use_fallback(&extents, 0, 200));
+    }
+
+    #[test]
+    fn test_read_exact_builder() {
+        let opts = Options::new().with_read_exact(false);
+        assert!(!opts.read_exact);
+
+        let opts = opts.with_read_exact(true);
+        assert!(opts.read_exact);
     }
 }
