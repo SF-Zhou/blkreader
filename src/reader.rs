@@ -3,7 +3,7 @@
 //! This module provides the [`BlkReader`] trait which enables reading file data
 //! directly from the underlying block device using extent information.
 
-use crate::cache::{get_or_create_cached_device, open_device_uncached, CachedDevice};
+use crate::cache::{get_or_create_cached_device, open_device_uncached, BlockDevice};
 use crate::options::Options;
 use crate::state::State;
 
@@ -337,8 +337,8 @@ impl<'a> ReadContext<'a> {
 
 /// Handle to a block device, either cached or uncached.
 enum DeviceHandle {
-    Cached(Arc<CachedDevice>),
-    Uncached(CachedDevice),
+    Cached(Arc<BlockDevice>),
+    Uncached(BlockDevice),
 }
 
 impl DeviceHandle {
