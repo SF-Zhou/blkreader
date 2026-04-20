@@ -7,12 +7,55 @@ use blkmap::Fiemap;
 use blkpath::ResolveDevice;
 use blkreader::{BlkReader, Options};
 use clap::Parser;
+use std::alloc::{alloc_zeroed, handle_alloc_error, Layout};
 use std::fs::File;
 use std::io::{self, Write};
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
 /// Default chunk size for reading large files (1 MB).
 const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
+
+/// Aligned buffer for Direct I/O.
+///
+/// Wraps a manually-allocated aligned memory block and ensures
+/// correct deallocation with the original layout on drop.
+struct AlignedBuffer {
+    ptr: *mut u8,
+    size: usize,
+    layout: Layout,
+}
+
+impl AlignedBuffer {
+    fn new(size: usize, align: usize) -> Self {
+        let layout = Layout::from_size_align(size, align).expect("invalid alignment");
+        let ptr = unsafe { alloc_zeroed(layout) };
+        if ptr.is_null() {
+            handle_alloc_error(layout);
+        }
+        Self { ptr, size, layout }
+    }
+}
+
+impl Deref for AlignedBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.size) }
+    }
+}
+
+impl DerefMut for AlignedBuffer {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.size) }
+    }
+}
+
+impl Drop for AlignedBuffer {
+    fn drop(&mut self) {
+        unsafe { std::alloc::dealloc(self.ptr, self.layout) };
+    }
+}
 
 /// Read file data directly from block device using extent information.
 ///
@@ -73,17 +116,6 @@ fn main() {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
-}
-
-/// Allocate an aligned buffer for Direct I/O.
-fn alloc_aligned_buffer(size: usize, align: usize) -> Vec<u8> {
-    // Allocate with extra space for alignment
-    let layout = std::alloc::Layout::from_size_align(size, align).unwrap();
-    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    if ptr.is_null() {
-        panic!("Failed to allocate aligned buffer");
-    }
-    unsafe { Vec::from_raw_parts(ptr, size, size) }
 }
 
 /// Align offset down to the alignment boundary.
@@ -153,7 +185,7 @@ fn run(args: &Args) -> io::Result<()> {
     let chunk_size = DEFAULT_CHUNK_SIZE;
 
     // Allocate aligned buffer.
-    let mut buf = alloc_aligned_buffer(chunk_size, args.alignment as usize);
+    let mut buf = AlignedBuffer::new(chunk_size, args.alignment as usize);
 
     // Read in chunks to handle large files
     let mut total_bytes_read = 0usize;
