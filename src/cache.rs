@@ -6,13 +6,12 @@
 //! to the underlying block device.
 
 use blkpath::ResolveDevice;
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 /// A cached block device entry containing the path and file handle.
 #[derive(Debug)]
@@ -39,8 +38,8 @@ impl CachedDevice {
 /// The cache is keyed by the device ID (from `stat.st_dev`), which
 /// uniquely identifies a filesystem. All files on the same filesystem
 /// share the same underlying block device.
-static DEVICE_CACHE: Lazy<RwLock<HashMap<u64, Arc<CachedDevice>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+static DEVICE_CACHE: LazyLock<RwLock<HashMap<u64, Arc<CachedDevice>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Get or create a cached block device entry for the given file.
 ///
