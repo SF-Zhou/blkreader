@@ -87,7 +87,6 @@ dependencies = [
  "blkpath",
  "clap",
  "libc",
- "once_cell",
  "sudo",
  "tempfile",
 ]
