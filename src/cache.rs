@@ -13,18 +13,18 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, RwLock};
 
-/// A cached block device entry containing the path and file handle.
+/// A block device entry containing the path and file handle.
 #[derive(Debug)]
-pub struct CachedDevice {
+pub struct BlockDevice {
     /// Path to the block device.
     pub path: PathBuf,
     /// File handle opened with O_DIRECT for reading.
     pub file: File,
 }
 
-impl CachedDevice {
-    /// Create a new cached device entry.
-    fn new(path: PathBuf) -> io::Result<Self> {
+impl BlockDevice {
+    /// Open a new block device handle.
+    pub fn open(path: PathBuf) -> io::Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECT)
@@ -38,7 +38,7 @@ impl CachedDevice {
 /// The cache is keyed by the device ID (from `stat.st_dev`), which
 /// uniquely identifies a filesystem. All files on the same filesystem
 /// share the same underlying block device.
-static DEVICE_CACHE: LazyLock<RwLock<HashMap<u64, Arc<CachedDevice>>>> =
+static DEVICE_CACHE: LazyLock<RwLock<HashMap<u64, Arc<BlockDevice>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Get or create a cached block device entry for the given file.
@@ -55,7 +55,7 @@ static DEVICE_CACHE: LazyLock<RwLock<HashMap<u64, Arc<CachedDevice>>>> =
 ///
 /// An `Arc` to the cached device entry, or an error if the device
 /// could not be resolved or opened.
-pub fn get_or_create_cached_device(file: &File) -> io::Result<Arc<CachedDevice>> {
+pub fn get_or_create_cached_device(file: &File) -> io::Result<Arc<BlockDevice>> {
     let dev_id = file.metadata()?.dev();
 
     // First, try to get from cache with a read lock
@@ -76,7 +76,7 @@ pub fn get_or_create_cached_device(file: &File) -> io::Result<Arc<CachedDevice>>
     }
 
     // Create new entry
-    let entry = Arc::new(CachedDevice::new(device_path)?);
+    let entry = Arc::new(BlockDevice::open(device_path)?);
     cache.insert(dev_id, Arc::clone(&entry));
     Ok(entry)
 }
@@ -91,11 +91,11 @@ pub fn get_or_create_cached_device(file: &File) -> io::Result<Arc<CachedDevice>>
 ///
 /// # Returns
 ///
-/// A `CachedDevice` entry (not actually cached), or an error if
-/// the device could not be resolved or opened.
-pub fn open_device_uncached(file: &File) -> io::Result<CachedDevice> {
+/// A `BlockDevice` handle, or an error if the device could not be
+/// resolved or opened.
+pub fn open_device_uncached(file: &File) -> io::Result<BlockDevice> {
     let device_path = file.resolve_device()?;
-    CachedDevice::new(device_path)
+    BlockDevice::open(device_path)
 }
 
 /// Clear the global device cache.

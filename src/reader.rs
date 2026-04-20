@@ -3,7 +3,7 @@
 //! This module provides the [`BlkReader`] trait which enables reading file data
 //! directly from the underlying block device using extent information.
 
-use crate::cache::{get_or_create_cached_device, open_device_uncached, CachedDevice};
+use crate::cache::{get_or_create_cached_device, open_device_uncached, BlockDevice};
 use crate::options::Options;
 use crate::state::State;
 
@@ -206,6 +206,20 @@ impl<'a> ReadContext<'a> {
         }
     }
 
+    /// Zero-fill a range in the buffer from current_offset to fill_end,
+    /// updating bytes_read and current_offset.
+    fn zero_fill_range(
+        buf: &mut [u8],
+        bytes_read: &mut usize,
+        current_offset: &mut u64,
+        fill_end: u64,
+    ) {
+        let len = (fill_end - *current_offset) as usize;
+        buf[*bytes_read..*bytes_read + len].fill(0);
+        *bytes_read += len;
+        *current_offset = fill_end;
+    }
+
     /// Read data from the block device based on extent information.
     fn read_from_device(
         &self,
@@ -228,21 +242,11 @@ impl<'a> ReadContext<'a> {
 
             // Handle hole before this extent
             if extent.logical > current_offset {
-                let hole_end = extent.logical.min(end);
-                let hole_len = (hole_end - current_offset) as usize;
-
                 if !self.options.fill_holes {
-                    // EOF at hole
                     return Ok(bytes_read);
                 }
-
-                // Fill with zeros
-                let buf_start = bytes_read;
-                let buf_end = buf_start + hole_len;
-                buf[buf_start..buf_end].fill(0);
-                bytes_read += hole_len;
-                current_offset = hole_end;
-
+                let hole_end = extent.logical.min(end);
+                Self::zero_fill_range(buf, &mut bytes_read, &mut current_offset, hole_end);
                 if current_offset >= end {
                     break;
                 }
@@ -250,35 +254,19 @@ impl<'a> ReadContext<'a> {
 
             // Handle unwritten extent - fill with zeros if requested
             if extent.flags.is_unwritten() && self.options.zero_unwritten {
-                // Fill with zeros for unwritten extent
-                let read_start = current_offset.max(extent.logical);
-                let read_end = extent_end.min(end);
-                let read_len = (read_end - read_start) as usize;
-
-                let buf_start = bytes_read;
-                let buf_end = buf_start + read_len;
-                buf[buf_start..buf_end].fill(0);
-                bytes_read += read_len;
-                current_offset = read_end;
+                let fill_end = extent_end.min(end);
+                Self::zero_fill_range(buf, &mut bytes_read, &mut current_offset, fill_end);
                 continue;
             }
             // Otherwise unwritten extents fall through to read raw data from block device
 
             // Handle hole-like extents (UNKNOWN, DELALLOC)
             if extent.flags.is_unknown() || extent.flags.is_delalloc() {
-                let read_start = current_offset.max(extent.logical);
-                let read_end = extent_end.min(end);
-                let hole_len = (read_end - read_start) as usize;
-
                 if !self.options.fill_holes {
                     return Ok(bytes_read);
                 }
-
-                let buf_start = bytes_read;
-                let buf_end = buf_start + hole_len;
-                buf[buf_start..buf_end].fill(0);
-                bytes_read += hole_len;
-                current_offset = read_end;
+                let fill_end = extent_end.min(end);
+                Self::zero_fill_range(buf, &mut bytes_read, &mut current_offset, fill_end);
                 continue;
             }
 
@@ -310,13 +298,7 @@ impl<'a> ReadContext<'a> {
 
         // Handle trailing hole
         if current_offset < end && self.options.fill_holes {
-            let remaining = (end - current_offset) as usize;
-            let buf_start = bytes_read;
-            let buf_end = buf_start + remaining;
-            if buf_end <= buf.len() {
-                buf[buf_start..buf_end].fill(0);
-                bytes_read += remaining;
-            }
+            Self::zero_fill_range(buf, &mut bytes_read, &mut current_offset, end);
         }
 
         // Check if we read the exact requested length
@@ -337,8 +319,8 @@ impl<'a> ReadContext<'a> {
 
 /// Handle to a block device, either cached or uncached.
 enum DeviceHandle {
-    Cached(Arc<CachedDevice>),
-    Uncached(CachedDevice),
+    Cached(Arc<BlockDevice>),
+    Uncached(BlockDevice),
 }
 
 impl DeviceHandle {
